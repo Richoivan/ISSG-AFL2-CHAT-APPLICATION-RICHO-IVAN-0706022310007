@@ -12,9 +12,8 @@ const rl = readline.createInterface({
 
 let registeredUsername = "";
 let username = "";
-const users = new Map(); // map username -> publicKey PEM (string)
+const users = new Map();
 
-// generate initial RSA keypair for this client
 function generateKeyPair() {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("rsa", {
     modulusLength: 2048,
@@ -24,12 +23,10 @@ function generateKeyPair() {
   return { publicKey, privateKey };
 }
 
-// current keypair used to sign messages (will be replaced on impersonate)
 let myKeyPair = generateKeyPair();
 let myPrivateKeyPem = myKeyPair.privateKey;
 let myPublicKeyPem = myKeyPair.publicKey;
 
-// helper: sign message (returns base64 signature)
 function signMessage(message, privateKeyPem) {
   const sign = crypto.createSign("sha256");
   sign.update(message, "utf8");
@@ -38,7 +35,6 @@ function signMessage(message, privateKeyPem) {
   return signature.toString("base64");
 }
 
-// helper: verify signature (signature base64) using sender publicKey PEM
 function verifySignature(message, signatureBase64, publicKeyPem) {
   try {
     const verify = crypto.createVerify("sha256");
@@ -59,7 +55,6 @@ socket.on("connect", () => {
     registeredUsername = input;
     console.log(`Welcome, ${username} to the chat`);
 
-    // register our initial public key with server
     socket.emit("registerPublicKey", {
       username,
       publicKey: myPublicKeyPem,
@@ -69,41 +64,26 @@ socket.on("connect", () => {
 
     rl.on("line", (message) => {
       if (message.trim()) {
-        // command: impersonate
         let match;
+
         if ((match = message.match(/^!impersonate (\w+)$/))) {
           const target = match[1];
-
-          // generate new keypair for impersonation and replace current keys
           myKeyPair = generateKeyPair();
           myPrivateKeyPem = myKeyPair.privateKey;
           myPublicKeyPem = myKeyPair.publicKey;
-
-          // change displayed username (we are now sending as target)
           username = target;
           console.log(`Now impersonating as ${username}`);
-
-          // notify server that this username has a (new) public key
-          socket.emit("registerPublicKey", {
-            username,
-            publicKey: myPublicKeyPem,
-          });
         } else if (message.match(/^!exit$/)) {
           username = registeredUsername;
           console.log(`Now you are ${username}`);
-
-          // restore original keypair for the registered username
-          // (optional: regenerate original keypair or reuse prior; here we regenerate)
           myKeyPair = generateKeyPair();
           myPrivateKeyPem = myKeyPair.privateKey;
           myPublicKeyPem = myKeyPair.publicKey;
-
           socket.emit("registerPublicKey", {
             username,
             publicKey: myPublicKeyPem,
           });
         } else {
-          // normal message: sign with current private key and send signature
           const signature = signMessage(message, myPrivateKeyPem);
           socket.emit("message", { username, message, signature });
         }
@@ -113,7 +93,6 @@ socket.on("connect", () => {
   });
 });
 
-// server sends initial keys as array of [user, key]
 socket.on("init", (keys) => {
   keys.forEach(([user, key]) => users.set(user, key));
   console.log(`\nThere are currently ${users.size} users in the chat`);
@@ -122,33 +101,27 @@ socket.on("init", (keys) => {
 
 socket.on("newUser", (data) => {
   const { username: newUser, publicKey } = data;
-
-  // if we already know this user's key, but it changed -> suspicious
   if (users.has(newUser)) {
     const oldKey = users.get(newUser);
     if (oldKey !== publicKey) {
       console.log("[WARNING] this user is fake (public key changed)");
     }
   }
-
   users.set(newUser, publicKey);
   console.log(`${newUser} join the chat`);
   rl.prompt();
 });
 
 socket.on("message", (data) => {
-  // expecting { username, message, signature? }
   const { username: senderUsername, message: senderMessage, signature } = data;
 
   if (senderUsername !== username) {
     const senderPublicKey = users.get(senderUsername);
 
     if (!senderPublicKey) {
-      // we don't have a public key for this sender -> suspicious
       console.log("[WARNING] this user is fake (no public key known)");
       console.log(`${senderUsername}: ${senderMessage}`);
     } else {
-      // if no signature provided -> suspicious
       if (!signature) {
         console.log("[WARNING] this user is fake (no signature)");
         console.log(`${senderUsername}: ${senderMessage}`);
@@ -158,7 +131,6 @@ socket.on("message", (data) => {
           console.log("[WARNING] this user is fake (signature invalid)");
           console.log(`${senderUsername}: ${senderMessage}`);
         } else {
-          // valid
           console.log(`${senderUsername}: ${senderMessage}`);
         }
       }
@@ -172,6 +144,7 @@ socket.on("disconnect", () => {
   rl.close();
   process.exit(0);
 });
+
 rl.on("SIGINT", () => {
   console.log("\nExiting...");
   socket.disconnect();
